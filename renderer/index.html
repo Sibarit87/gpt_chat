@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:;"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GPT Chat</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="sidebar-top">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span>GPT Chat</span>
+        </div>
+        <button class="btn-new" id="newChatBtn" type="button">Новый чат</button>
+      </div>
+      <div class="chat-list" id="chatList"></div>
+    </aside>
+
+    <main class="main">
+      <header class="chat-header" id="chatHeader">
+        <h1 id="chatTitle">Выберите чат</h1>
+        <button class="icon-btn danger hidden" id="deleteChatBtn" type="button" title="Удалить чат">
+          Удалить
+        </button>
+      </header>
+
+      <section class="dialog" id="dialog" aria-live="polite">
+        <div class="empty" id="emptyState">
+          <p class="empty-title" id="emptyTitle">Локальный чат с GPT</p>
+          <p id="emptyText">Поиск, код и картинки включаются кнопками под полем ввода — по умолчанию выключены, чтобы не тратить лишнее.</p>
+        </div>
+        <div class="messages" id="messages"></div>
+      </section>
+
+      <form class="composer" id="composer">
+        <textarea
+          id="input"
+          rows="1"
+          placeholder="Напишите сообщение… Enter — отправить, Shift+Enter — новая строка"
+          disabled
+        ></textarea>
+        <div class="attach-list" id="attachList"></div>
+        <div class="composer-bar">
+          <label class="model-picker">
+            <span class="model-picker-label">Модель</span>
+            <select id="modelSelect"></select>
+          </label>
+          <button class="tool-toggle" id="webSearchBtn" type="button" title="Веб-поиск. Выключен по умолчанию — включайте только когда нужны свежие данные.">Поиск</button>
+          <button class="tool-toggle" id="codeBtn" type="button" title="Песочница Python. Выключена по умолчанию.">Код</button>
+          <button class="tool-toggle" id="imageBtn" type="button" title="Генерация картинок. Выключена по умолчанию.">Картинка</button>
+          <button class="tool-toggle" id="attachBtn" type="button" title="Прикрепить файл или изображение">Файл</button>
+          <input class="hidden" id="fileInput" type="file" multiple accept=".pdf,.txt,.md,.csv,.json,.doc,.docx,.xlsx,.xls,.pptx,.html,.png,.jpg,.jpeg,.webp,.gif" />
+          <button class="btn-send" id="sendBtn" type="submit" disabled>Отправить</button>
+          <button class="btn-stop hidden" id="stopBtn" type="button">Стоп</button>
+        </div>
+      </form>
+    </main>
+
+    <script src="vendor/marked.umd.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

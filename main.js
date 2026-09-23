@@ -1,0 +1,387 @@
+const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const storage = require("./storage");
+const filesApi = require("./files");
+const { createClient, describeError } = require("./openai-client");
+const { DEFAULT_MODEL, MODELS, resolveModel } = require("./models");
+
+let mainWindow = null;
+let abortController = null;
+let streaming = false;
+
+function appDir() {
+  if (process.env.PORTABLE_EXECUTABLE_DIR) {
+    return process.env.PORTABLE_EXECUTABLE_DIR;
+  }
+  if (process.env.PORTABLE_EXECUTABLE_FILE) {
+    return path.dirname(process.env.PORTABLE_EXECUTABLE_FILE);
+  }
+  if (app?.isPackaged) {
+    return path.dirname(process.execPath);
+  }
+  return __dirname;
+}
+
+function loadEnv() {
+  if (process.env.OPENAI_API_KEY) {
+    process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY.trim();
+    return;
+  }
+
+  const candidates = [
+    path.join(appDir(), ".env"),
+    path.join(process.cwd(), ".env"),
+    path.join(__dirname, ".env"),
+  ];
+  const seen = new Set();
+
+  for (const file of candidates) {
+    const resolved = path.resolve(file);
+    if (seen.has(resolved) || !fs.existsSync(resolved)) continue;
+    seen.add(resolved);
+    require("dotenv").config({ path: resolved, override: true });
+    if (process.env.OPENAI_API_KEY) {
+      process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY.trim();
+      return;
+    }
+  }
+}
+
+loadEnv();
+
+function dataRoot() {
+  const appData = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
+  return path.join(appData, "GPT Chat", "data");
+}
+
+function legacyDataRoots() {
+  const roots = [path.join(__dirname, "data")];
+  if (process.env.PORTABLE_EXECUTABLE_DIR) {
+    roots.push(path.join(process.env.PORTABLE_EXECUTABLE_DIR, "data"));
+  }
+  if (process.env.PORTABLE_EXECUTABLE_FILE) {
+    roots.push(path.join(path.dirname(process.env.PORTABLE_EXECUTABLE_FILE), "data"));
+  }
+  if (app?.isPackaged) {
+    roots.push(path.join(path.dirname(process.execPath), "data"));
+  }
+  return roots;
+}
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1180,
+    height: 780,
+    minWidth: 860,
+    minHeight: 560,
+    backgroundColor: "#121418",
+    title: "GPT Chat",
+    icon: path.join(__dirname, "build", "icon.png"),
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url);
+    return { action: "deny" };
+  });
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (url !== mainWindow.webContents.getURL()) {
+      event.preventDefault();
+      shell.openExternal(url);
+    }
+  });
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
+}
+
+function sendToRenderer(channel, data) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, data);
+  }
+}
+
+app.whenReady().then(async () => {
+  loadEnv();
+  await storage.migrateChats(dataRoot(), legacyDataRoots());
+  if (!process.env.OPENAI_API_KEY) {
+    dialog.showErrorBox(
+      "Нет ключа OpenAI",
+      "Положите файл .env рядом с приложением (или в папку проекта) с строкой:\nOPENAI_API_KEY=sk-..."
+    );
+  }
+
+  createWindow();
+
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
+});
+
+ipcMain.handle("chats:list", () => storage.listChats(dataRoot()));
+
+ipcMain.handle("chats:get", async (_event, id) => {
+  const chat = await storage.getChat(dataRoot(), id);
+  const messages = [];
+  for (const message of chat.messages || []) {
+    const copy = { ...message };
+    if (copy.images?.length) {
+      copy.previewImages = [];
+      for (const image of copy.images) {
+        try {
+          copy.previewImages.push(await filesApi.readDataUrl(image));
+        } catch {
+          // skip
+        }
+      }
+    }
+    delete copy.images;
+    messages.push(copy);
+  }
+  return {
+    ...chat,
+    files: (chat.files || []).map(filesApi.publicFile),
+    messages,
+  };
+});
+
+ipcMain.handle("chats:create", async () => {
+  const chat = storage.createChat();
+  await storage.saveChat(dataRoot(), chat);
+  return chat;
+});
+
+ipcMain.handle("chats:rename", async (_event, id, title) => {
+  const chat = await storage.getChat(dataRoot(), id);
+  chat.title = String(title || "").trim() || "Новый чат";
+  chat.updatedAt = Date.now();
+  await storage.saveChat(dataRoot(), chat);
+  return chat;
+});
+
+ipcMain.handle("chats:delete", (_event, id) => storage.deleteChat(dataRoot(), id));
+
+ipcMain.handle("chat:stop", () => {
+  if (abortController) abortController.abort();
+  return true;
+});
+
+function buildTools(chat, options) {
+  const tools = [];
+  if (options.webSearch) tools.push({ type: "web_search" });
+  if (options.codeInterpreter) {
+    const fileIds = (chat.files || []).filter((file) => file.openaiFileId).map((file) => file.openaiFileId);
+    tools.push({
+      type: "code_interpreter",
+      container: fileIds.length ? { type: "auto", file_ids: fileIds } : { type: "auto" },
+    });
+  }
+  if (options.imageGen) tools.push({ type: "image_generation" });
+  const docs = (chat.files || []).filter((file) => file.kind === "doc" && chat.vectorStoreId);
+  if (docs.length && chat.vectorStoreId) {
+    tools.push({ type: "file_search", vector_store_ids: [chat.vectorStoreId] });
+  }
+  return tools;
+}
+
+async function toInputMessages(chat, currentUser) {
+  const input = [];
+  for (const message of chat.messages) {
+    if (message.role !== "user" && message.role !== "assistant") continue;
+    if (message.role === "assistant") {
+      if (message.content) input.push({ role: "assistant", content: message.content });
+      continue;
+    }
+    const parts = [];
+    if (message.content) parts.push({ type: "input_text", text: message.content });
+    for (const image of message.images || []) {
+      try {
+        const dataUrl = await filesApi.readDataUrl(image);
+        parts.push({ type: "input_image", image_url: dataUrl });
+      } catch {
+        // skip missing images
+      }
+    }
+    if (parts.length) input.push({ role: "user", content: parts });
+  }
+  if (currentUser) input.push(currentUser);
+  return input;
+}
+
+function collectCitations(response) {
+  const citations = [];
+  const seen = new Set();
+  for (const item of response?.output || []) {
+    for (const part of item.content || []) {
+      for (const ann of part.annotations || []) {
+        if (ann.type === "url_citation" && ann.url && !seen.has(ann.url)) {
+          seen.add(ann.url);
+          citations.push({ title: ann.title || ann.url, url: ann.url });
+        }
+      }
+    }
+  }
+  return citations;
+}
+
+ipcMain.handle("models:list", () => ({ defaultModel: DEFAULT_MODEL, models: MODELS }));
+
+ipcMain.handle("files:attach", async (_event, chatId, payload) => {
+  if (!process.env.OPENAI_API_KEY) return { ok: false, error: "Нет ключа OpenAI" };
+  const root = dataRoot();
+  const chat = await storage.getChat(root, chatId);
+  try {
+    const file = await filesApi.attachFile(createClient(process.env.OPENAI_API_KEY), root, chat, payload);
+    await storage.saveChat(root, chat);
+    return { ok: true, file, files: (chat.files || []).map(filesApi.publicFile) };
+  } catch (err) {
+    return { ok: false, error: describeError(err) };
+  }
+});
+
+ipcMain.handle("files:remove", async (_event, chatId, fileId) => {
+  const root = dataRoot();
+  const chat = await storage.getChat(root, chatId);
+  await filesApi.removeFile(createClient(process.env.OPENAI_API_KEY), chat, fileId);
+  await storage.saveChat(root, chat);
+  return { ok: true, files: (chat.files || []).map(filesApi.publicFile) };
+});
+
+ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
+  const text = String(content || "").trim();
+  if (!text) return { ok: false, error: "Пустое сообщение" };
+  if (streaming) return { ok: false, error: "Уже идёт ответ" };
+  if (!process.env.OPENAI_API_KEY) {
+    return { ok: false, error: "Нет OPENAI_API_KEY в файле .env" };
+  }
+
+  const model = resolveModel(options.model);
+  const root = dataRoot();
+  const chat = await storage.getChat(root, chatId);
+  const imageFiles = (chat.files || []).filter((file) => file.kind === "image");
+  chat.messages.push({
+    role: "user",
+    content: text,
+    images: imageFiles.map((file) => ({
+      localPath: file.localPath,
+      mime: file.mime,
+      name: file.name,
+    })),
+  });
+  chat.files = (chat.files || []).filter((file) => file.kind !== "image");
+  if (chat.messages.filter((message) => message.role === "user").length === 1) {
+    chat.title = storage.titleFromMessage(text);
+  }
+  chat.updatedAt = Date.now();
+  await storage.saveChat(root, chat);
+
+  streaming = true;
+  abortController = new AbortController();
+
+  const client = createClient(process.env.OPENAI_API_KEY);
+  const assistant = {
+    role: "assistant",
+    content: "",
+    model,
+    citations: [],
+    images: [],
+    used: {
+      webSearch: Boolean(options.webSearch),
+      codeInterpreter: Boolean(options.codeInterpreter),
+      imageGen: Boolean(options.imageGen),
+    },
+  };
+  const tools = buildTools(chat, {
+    webSearch: Boolean(options.webSearch),
+    codeInterpreter: Boolean(options.codeInterpreter),
+    imageGen: Boolean(options.imageGen),
+  });
+
+  try {
+    const input = await toInputMessages(chat);
+    const stream = await client.responses.create(
+      {
+        model,
+        input,
+        stream: true,
+        ...(tools.length ? { tools } : {}),
+      },
+      { signal: abortController.signal }
+    );
+
+    for await (const event of stream) {
+      const type = event?.type || "";
+      if (type === "response.output_text.delta" && event.delta) {
+        assistant.content += event.delta;
+        sendToRenderer("chat:chunk", { chatId, delta: event.delta });
+      } else if (type === "response.web_search_call.searching" || type === "response.web_search_call.in_progress") {
+        sendToRenderer("chat:status", { chatId, status: "Ищу в интернете…" });
+      } else if (type === "response.file_search_call.searching" || type === "response.file_search_call.in_progress") {
+        sendToRenderer("chat:status", { chatId, status: "Смотрю прикреплённые файлы…" });
+      } else if (type === "response.code_interpreter_call.in_progress" || type === "response.code_interpreter_call.interpreting") {
+        sendToRenderer("chat:status", { chatId, status: "Считаю в песочнице…" });
+      } else if (type === "response.image_generation_call.generating" || type === "response.image_generation_call.in_progress") {
+        sendToRenderer("chat:status", { chatId, status: "Рисую картинку…" });
+      } else if (type === "response.output_item.done" && event.item?.type === "image_generation_call" && event.item.result) {
+        assistant.images.push(`data:image/png;base64,${event.item.result}`);
+        sendToRenderer("chat:image", { chatId, dataUrl: assistant.images[assistant.images.length - 1] });
+      } else if (type === "response.completed") {
+        assistant.citations = collectCitations(event.response);
+        if (!assistant.content && event.response?.output_text) {
+          assistant.content = event.response.output_text;
+        }
+      }
+    }
+
+    chat.messages.push(assistant);
+    chat.updatedAt = Date.now();
+    await storage.saveChat(root, chat);
+    sendToRenderer("chat:done", {
+      chatId,
+      content: assistant.content,
+      title: chat.title,
+      model,
+      citations: assistant.citations,
+      images: assistant.images,
+    });
+    return { ok: true, title: chat.title, model };
+  } catch (err) {
+    const aborted = err?.name === "AbortError" || abortController.signal.aborted;
+    if (aborted) {
+      if (assistant.content || assistant.images.length) {
+        chat.messages.push(assistant);
+        chat.updatedAt = Date.now();
+        await storage.saveChat(root, chat);
+      }
+      sendToRenderer("chat:done", {
+        chatId,
+        content: assistant.content,
+        title: chat.title,
+        model,
+        citations: assistant.citations,
+        images: assistant.images,
+        stopped: true,
+      });
+      return { ok: true, stopped: true, title: chat.title, model };
+    }
+
+    const message = describeError(err);
+    sendToRenderer("chat:error", { chatId, error: message });
+    return { ok: false, error: message };
+  } finally {
+    streaming = false;
+    abortController = null;
+  }
+});
