@@ -59,6 +59,29 @@
           <button class="btn-send" id="sendBtn" type="submit" disabled>Отправить</button>
           <button class="btn-stop hidden" id="stopBtn" type="button">Стоп</button>
         </div>
+        <div class="image-options hidden" id="imageOptions">
+          <label class="image-option">
+            <span>Качество</span>
+            <select id="imageQuality">
+              <option value="auto">Авто</option>
+              <option value="low">Низкое</option>
+              <option value="medium">Среднее</option>
+              <option value="high">Высокое</option>
+              <option value="xhigh">Очень высокое</option>
+              <option value="max">Максимум</option>
+            </select>
+          </label>
+          <label class="image-option">
+            <span>Размер</span>
+            <select id="imageSize">
+              <option value="auto">Авто</option>
+              <option value="1024x1024">Квадрат 1024</option>
+              <option value="1536x1024">Горизонталь 1536×1024</option>
+              <option value="1024x1536">Вертикаль 1024×1536</option>
+            </select>
+          </label>
+          <p class="image-options-hint">Выше качество — дороже и дольше. Настройки запоминаются.</p>
+        </div>
       </form>
     </main>
 

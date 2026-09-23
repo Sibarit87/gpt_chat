@@ -7,6 +7,12 @@ contextBridge.exposeInMainWorld("chatApi", {
   renameChat: (id, title) => ipcRenderer.invoke("chats:rename", id, title),
   deleteChat: (id) => ipcRenderer.invoke("chats:delete", id),
   getModels: () => ipcRenderer.invoke("models:list"),
+  getTheme: () => ipcRenderer.invoke("settings:theme"),
+  onTheme: (cb) => {
+    const listener = (_event, data) => cb(data);
+    ipcRenderer.on("settings:theme", listener);
+    return () => ipcRenderer.removeListener("settings:theme", listener);
+  },
   attachFile: (chatId, payload) => ipcRenderer.invoke("files:attach", chatId, payload),
   removeFile: (chatId, fileId) => ipcRenderer.invoke("files:remove", chatId, fileId),
   sendMessage: (chatId, content, options) => ipcRenderer.invoke("chat:send", chatId, content, options),

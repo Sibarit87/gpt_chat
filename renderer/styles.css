@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark;
   --bg: #121418;
   --bg-sidebar: #0c0e12;
   --bg-elevated: #1a1e26;
@@ -10,8 +11,47 @@
   --muted: #9aa3b2;
   --accent: #3dcfb6;
   --accent-dim: #2a9d8a;
+  --on-accent: #08221c;
   --danger: #ef6b6b;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+  --tool-active-bg: #16352f;
+  --code-bg: #0b0d12;
+  --code-inline-bg: rgba(0, 0, 0, 0.28);
+  --quote-bg: rgba(0, 0, 0, 0.18);
+  --table-head: rgba(0, 0, 0, 0.28);
+  --table-stripe: rgba(255, 255, 255, 0.03);
+  --error-bg: #3a1f24;
+  --error-text: #ffc9c9;
+  --stop-bg: #5a2a2a;
+  --scroll-thumb: #343b4a;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --bg-sidebar: #f7f7f8;
+  --bg-elevated: #ffffff;
+  --bg-hover: #ececf1;
+  --bg-user: #f4f4f4;
+  --bg-assistant: #ffffff;
+  --line: #e5e5e5;
+  --text: #0d0d0d;
+  --muted: #6e6e80;
+  --accent: #10a37f;
+  --accent-dim: #1a7f64;
+  --on-accent: #ffffff;
+  --danger: #c43c3c;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --tool-active-bg: #e7f6f1;
+  --code-bg: #f4f4f4;
+  --code-inline-bg: rgba(0, 0, 0, 0.06);
+  --quote-bg: rgba(16, 163, 127, 0.08);
+  --table-head: #f4f4f4;
+  --table-stripe: #fafafa;
+  --error-bg: #fdecec;
+  --error-text: #8a1f1f;
+  --stop-bg: #c44c4c;
+  --scroll-thumb: #d0d0d6;
 }
 
 * {
@@ -81,6 +121,7 @@ textarea {
 
 .btn-new {
   background: var(--accent-dim);
+  color: #fff;
   padding: 10px 12px;
   font-weight: 600;
 }
@@ -258,6 +299,12 @@ textarea {
   max-width: 88%;
 }
 
+[data-theme="light"] .message.assistant {
+  box-shadow: none;
+  padding-left: 0;
+  padding-right: 0;
+}
+
 .message-body {
   overflow-x: auto;
 }
@@ -308,7 +355,7 @@ textarea {
   padding: 6px 10px;
   border-left: 3px solid var(--accent-dim);
   color: var(--muted);
-  background: rgba(0, 0, 0, 0.18);
+  background: var(--quote-bg);
   border-radius: 0 8px 8px 0;
 }
 
@@ -335,18 +382,18 @@ textarea {
 }
 
 .message-body th {
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--table-head);
   font-weight: 650;
 }
 
 .message-body tr:nth-child(even) td {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--table-stripe);
 }
 
 .message.error {
   align-self: center;
-  background: #3a1f24;
-  color: #ffc9c9;
+  background: var(--error-bg);
+  color: var(--error-text);
   max-width: 90%;
 }
 
@@ -361,7 +408,7 @@ textarea {
 .message pre {
   margin: 8px 0;
   padding: 10px 12px;
-  background: #0b0d12;
+  background: var(--code-bg);
   border-radius: 8px;
   overflow-x: auto;
   font-size: 13px;
@@ -373,7 +420,7 @@ textarea {
 }
 
 .message :not(pre) > code {
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--code-inline-bg);
   padding: 1px 5px;
   border-radius: 4px;
 }
@@ -448,9 +495,50 @@ textarea {
 }
 
 .tool-toggle.active {
-  background: #16352f;
+  background: var(--tool-active-bg);
   border-color: var(--accent-dim);
   color: var(--accent);
+}
+
+.image-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: var(--bg-elevated);
+  border-radius: 12px;
+}
+
+.image-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.image-option span {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.image-option select {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%239aa3b2' d='M1.2 1.3L6 6.1l4.8-4.8'/%3E%3C/svg%3E") no-repeat right 10px center;
+  color: var(--text);
+  border-radius: 10px;
+  padding: 7px 32px 7px 10px;
+  outline: none;
+  cursor: pointer;
+}
+
+.image-options-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  flex: 1 1 180px;
 }
 
 .attach-list {
@@ -539,7 +627,7 @@ textarea {
 
 .btn-send {
   background: var(--accent);
-  color: #08221c;
+  color: var(--on-accent);
   font-weight: 700;
   padding: 12px 16px;
   min-width: 118px;
@@ -552,7 +640,7 @@ textarea {
 }
 
 .btn-stop {
-  background: #5a2a2a;
+  background: var(--stop-bg);
   padding: 12px 16px;
   min-width: 118px;
 }
@@ -586,6 +674,6 @@ textarea {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #343b4a;
+  background: var(--scroll-thumb);
   border-radius: 10px;
 }

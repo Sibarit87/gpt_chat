@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, dialog, shell, nativeTheme } = require("electron");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -10,6 +10,89 @@ const { DEFAULT_MODEL, MODELS, resolveModel } = require("./models");
 let mainWindow = null;
 let abortController = null;
 let streaming = false;
+let settings = { theme: "dark" };
+
+const IMAGE_QUALITY = new Set(["auto", "low", "medium", "high", "xhigh", "max"]);
+const IMAGE_SIZE = new Set(["auto", "1024x1024", "1536x1024", "1024x1536"]);
+const THEME_BG = { dark: "#121418", light: "#ffffff" };
+
+function settingsPath() {
+  return path.join(app.getPath("userData"), "settings.json");
+}
+
+function loadSettings() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(settingsPath(), "utf8"));
+    return {
+      theme: saved.theme === "light" ? "light" : "dark",
+    };
+  } catch {
+    return { theme: "dark" };
+  }
+}
+
+function saveSettings() {
+  fs.writeFileSync(settingsPath(), JSON.stringify(settings, null, 2));
+}
+
+function applyTheme(theme) {
+  settings.theme = theme === "light" ? "light" : "dark";
+  saveSettings();
+  nativeTheme.themeSource = settings.theme;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setBackgroundColor(THEME_BG[settings.theme]);
+    sendToRenderer("settings:theme", { theme: settings.theme });
+  }
+}
+
+function buildMenu() {
+  const template = [
+    { role: "fileMenu" },
+    { role: "editMenu" },
+    {
+      label: "View",
+      submenu: [
+        {
+          label: "Тема",
+          submenu: [
+            {
+              label: "Тёмная",
+              type: "radio",
+              checked: settings.theme === "dark",
+              click: () => applyTheme("dark"),
+            },
+            {
+              label: "Светлая (ChatGPT)",
+              type: "radio",
+              checked: settings.theme === "light",
+              click: () => applyTheme("light"),
+            },
+          ],
+        },
+        { type: "separator" },
+        { role: "reload" },
+        { role: "forceReload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
+    { role: "windowMenu" },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+function resolveImageQuality(value) {
+  return IMAGE_QUALITY.has(value) ? value : "auto";
+}
+
+function resolveImageSize(value) {
+  return IMAGE_SIZE.has(value) ? value : "auto";
+}
 
 function appDir() {
   if (process.env.PORTABLE_EXECUTABLE_DIR) {
@@ -76,7 +159,7 @@ function createWindow() {
     height: 780,
     minWidth: 860,
     minHeight: 560,
-    backgroundColor: "#121418",
+    backgroundColor: THEME_BG[settings.theme] || THEME_BG.dark,
     title: "GPT Chat",
     icon: path.join(__dirname, "build", "icon.png"),
     webPreferences: {
@@ -88,6 +171,12 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
+  mainWindow.webContents.on("dom-ready", () => {
+    const theme = settings.theme === "light" ? "light" : "dark";
+    mainWindow.webContents.executeJavaScript(
+      `document.documentElement.dataset.theme = ${JSON.stringify(theme)}`
+    );
+  });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: "deny" };
@@ -111,6 +200,9 @@ function sendToRenderer(channel, data) {
 
 app.whenReady().then(async () => {
   loadEnv();
+  settings = loadSettings();
+  nativeTheme.themeSource = settings.theme === "light" ? "light" : "dark";
+  buildMenu();
   await storage.migrateChats(dataRoot(), legacyDataRoots());
   if (!process.env.OPENAI_API_KEY) {
     dialog.showErrorBox(
@@ -188,7 +280,13 @@ function buildTools(chat, options) {
       container: fileIds.length ? { type: "auto", file_ids: fileIds } : { type: "auto" },
     });
   }
-  if (options.imageGen) tools.push({ type: "image_generation" });
+  if (options.imageGen) {
+    tools.push({
+      type: "image_generation",
+      quality: resolveImageQuality(options.imageQuality),
+      size: resolveImageSize(options.imageSize),
+    });
+  }
   const docs = (chat.files || []).filter((file) => file.kind === "doc" && chat.vectorStoreId);
   if (docs.length && chat.vectorStoreId) {
     tools.push({ type: "file_search", vector_store_ids: [chat.vectorStoreId] });
@@ -237,6 +335,8 @@ function collectCitations(response) {
 }
 
 ipcMain.handle("models:list", () => ({ defaultModel: DEFAULT_MODEL, models: MODELS }));
+
+ipcMain.handle("settings:theme", () => settings.theme);
 
 ipcMain.handle("files:attach", async (_event, chatId, payload) => {
   if (!process.env.OPENAI_API_KEY) return { ok: false, error: "Нет ключа OpenAI" };
@@ -307,6 +407,8 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
     webSearch: Boolean(options.webSearch),
     codeInterpreter: Boolean(options.codeInterpreter),
     imageGen: Boolean(options.imageGen),
+    imageQuality: options.imageQuality,
+    imageSize: options.imageSize,
   });
 
   try {

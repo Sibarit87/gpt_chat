@@ -15,11 +15,18 @@ const modelSelect = document.getElementById("modelSelect");
 const webSearchBtn = document.getElementById("webSearchBtn");
 const codeBtn = document.getElementById("codeBtn");
 const imageBtn = document.getElementById("imageBtn");
+const imageOptions = document.getElementById("imageOptions");
+const imageQuality = document.getElementById("imageQuality");
+const imageSize = document.getElementById("imageSize");
 const attachBtn = document.getElementById("attachBtn");
 const fileInput = document.getElementById("fileInput");
 const attachList = document.getElementById("attachList");
 
 const MODEL_STORAGE_KEY = "gpt-chat.model";
+const IMAGE_QUALITY_KEY = "gpt-chat.imageQuality";
+const IMAGE_SIZE_KEY = "gpt-chat.imageSize";
+const IMAGE_QUALITIES = ["auto", "low", "medium", "high", "xhigh", "max"];
+const IMAGE_SIZES = ["auto", "1024x1024", "1536x1024", "1024x1536"];
 const TOOL_KEYS = {
   webSearch: "gpt-chat.webSearch",
   codeInterpreter: "gpt-chat.code",
@@ -73,6 +80,7 @@ function syncToolButtons() {
   webSearchBtn.classList.toggle("active", toolOn("webSearch"));
   codeBtn.classList.toggle("active", toolOn("codeInterpreter"));
   imageBtn.classList.toggle("active", toolOn("imageGen"));
+  imageOptions.classList.toggle("hidden", !toolOn("imageGen"));
 }
 
 function bindTool(button, key) {
@@ -81,6 +89,24 @@ function bindTool(button, key) {
     syncToolButtons();
   });
 }
+
+function storedChoice(key, allowed, fallback) {
+  const saved = localStorage.getItem(key);
+  return allowed.includes(saved) ? saved : fallback;
+}
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme === "light" ? "light" : "dark";
+}
+
+imageQuality.value = storedChoice(IMAGE_QUALITY_KEY, IMAGE_QUALITIES, "auto");
+imageSize.value = storedChoice(IMAGE_SIZE_KEY, IMAGE_SIZES, "auto");
+imageQuality.addEventListener("change", () => {
+  localStorage.setItem(IMAGE_QUALITY_KEY, imageQuality.value);
+});
+imageSize.addEventListener("change", () => {
+  localStorage.setItem(IMAGE_SIZE_KEY, imageSize.value);
+});
 
 bindTool(webSearchBtn, "webSearch");
 bindTool(codeBtn, "codeInterpreter");
@@ -390,6 +416,8 @@ composer.addEventListener("submit", async (event) => {
     webSearch: toolOn("webSearch"),
     codeInterpreter: toolOn("codeInterpreter"),
     imageGen: toolOn("imageGen"),
+    imageQuality: imageQuality.value,
+    imageSize: imageSize.value,
   });
   if (!result?.ok && result?.error && assistantEl) {
     assistantEl.remove();
@@ -485,6 +513,8 @@ window.chatApi.onError(({ error }) => {
 });
 
 (async function init() {
+  applyTheme(await window.chatApi.getTheme());
+  window.chatApi.onTheme(({ theme }) => applyTheme(theme));
   fillModels(await window.chatApi.getModels());
   await refreshList();
   if (chats[0]) await openChat(chats[0].id);
