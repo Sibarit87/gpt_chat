@@ -157,7 +157,9 @@ function renderMarkdown(text) {
       gfm: true,
       breaks: true,
     });
-    return String(html).replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "");
+    return String(html)
+      .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
+      .replace(/<table[\s\S]*?<\/table>/gi, (table) => `<div class="table-wrap">${table}</div>`);
   } catch {
     return escapeHtml(source).replace(/\n/g, "<br>");
   }
