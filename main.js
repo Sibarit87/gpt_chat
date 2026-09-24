@@ -4,6 +4,7 @@ const os = require("os");
 const path = require("path");
 const storage = require("./storage");
 const filesApi = require("./files");
+const localFiles = require("./local-files");
 const { createClient, describeError } = require("./openai-client");
 const { DEFAULT_MODEL, MODELS, resolveModel } = require("./models");
 
@@ -291,6 +292,7 @@ function buildTools(chat, options) {
   if (docs.length && chat.vectorStoreId) {
     tools.push({ type: "file_search", vector_store_ids: [chat.vectorStoreId] });
   }
+  tools.push(...localFiles.FILE_TOOLS);
   return tools;
 }
 
@@ -332,6 +334,70 @@ function collectCitations(response) {
     }
   }
   return citations;
+}
+
+function parseToolArgs(raw) {
+  if (raw && typeof raw === "object") return raw;
+  try {
+    return JSON.parse(String(raw || "{}"));
+  } catch {
+    return {};
+  }
+}
+
+function functionCallsFrom(response, fallback) {
+  const fromResponse = (response?.output || []).filter((item) => item.type === "function_call");
+  return fromResponse.length ? fromResponse : fallback;
+}
+
+async function streamModelTurn({ client, model, input, tools, signal, chatId, assistant, previousId, first }) {
+  const pendingCalls = [];
+  const stream = await client.responses.create(
+    {
+      model,
+      input,
+      stream: true,
+      store: true,
+      ...(first ? { instructions: localFiles.FILE_INSTRUCTIONS } : {}),
+      ...(previousId ? { previous_response_id: previousId } : {}),
+      ...(tools.length ? { tools } : {}),
+    },
+    { signal }
+  );
+
+  let completed = null;
+  for await (const event of stream) {
+    const type = event?.type || "";
+    if (type === "response.output_text.delta" && event.delta) {
+      assistant.content += event.delta;
+      sendToRenderer("chat:chunk", { chatId, delta: event.delta });
+    } else if (type === "response.web_search_call.searching" || type === "response.web_search_call.in_progress") {
+      sendToRenderer("chat:status", { chatId, status: "Ищу в интернете…" });
+    } else if (type === "response.file_search_call.searching" || type === "response.file_search_call.in_progress") {
+      sendToRenderer("chat:status", { chatId, status: "Смотрю прикреплённые файлы…" });
+    } else if (type === "response.code_interpreter_call.in_progress" || type === "response.code_interpreter_call.interpreting") {
+      sendToRenderer("chat:status", { chatId, status: "Считаю в песочнице…" });
+    } else if (type === "response.image_generation_call.generating" || type === "response.image_generation_call.in_progress") {
+      sendToRenderer("chat:status", { chatId, status: "Рисую картинку…" });
+    } else if (type === "response.output_item.done" && event.item?.type === "image_generation_call" && event.item.result) {
+      assistant.images.push(`data:image/png;base64,${event.item.result}`);
+      sendToRenderer("chat:image", { chatId, dataUrl: assistant.images[assistant.images.length - 1] });
+    } else if (type === "response.output_item.done" && event.item?.type === "function_call") {
+      pendingCalls.push(event.item);
+      sendToRenderer("chat:status", { chatId, status: "Работаю с файлами…" });
+    } else if (type === "response.completed") {
+      completed = event.response;
+      assistant.citations = collectCitations(event.response);
+      if (!assistant.content && event.response?.output_text) {
+        assistant.content = event.response.output_text;
+      }
+    }
+  }
+
+  return {
+    response: completed,
+    calls: functionCallsFrom(completed, pendingCalls),
+  };
 }
 
 ipcMain.handle("models:list", () => ({ defaultModel: DEFAULT_MODEL, models: MODELS }));
@@ -397,6 +463,7 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
     model,
     citations: [],
     images: [],
+    fileOps: [],
     used: {
       webSearch: Boolean(options.webSearch),
       codeInterpreter: Boolean(options.codeInterpreter),
@@ -412,38 +479,35 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
   });
 
   try {
-    const input = await toInputMessages(chat);
-    const stream = await client.responses.create(
-      {
+    let input = await toInputMessages(chat);
+    let previousId;
+    for (let step = 0; step < 8; step += 1) {
+      const turn = await streamModelTurn({
+        client,
         model,
         input,
-        stream: true,
-        ...(tools.length ? { tools } : {}),
-      },
-      { signal: abortController.signal }
-    );
+        tools,
+        signal: abortController.signal,
+        chatId,
+        assistant,
+        previousId,
+        first: step === 0,
+      });
+      previousId = turn.response?.id;
+      const calls = turn.calls || [];
+      if (!calls.length) break;
 
-    for await (const event of stream) {
-      const type = event?.type || "";
-      if (type === "response.output_text.delta" && event.delta) {
-        assistant.content += event.delta;
-        sendToRenderer("chat:chunk", { chatId, delta: event.delta });
-      } else if (type === "response.web_search_call.searching" || type === "response.web_search_call.in_progress") {
-        sendToRenderer("chat:status", { chatId, status: "Ищу в интернете…" });
-      } else if (type === "response.file_search_call.searching" || type === "response.file_search_call.in_progress") {
-        sendToRenderer("chat:status", { chatId, status: "Смотрю прикреплённые файлы…" });
-      } else if (type === "response.code_interpreter_call.in_progress" || type === "response.code_interpreter_call.interpreting") {
-        sendToRenderer("chat:status", { chatId, status: "Считаю в песочнице…" });
-      } else if (type === "response.image_generation_call.generating" || type === "response.image_generation_call.in_progress") {
-        sendToRenderer("chat:status", { chatId, status: "Рисую картинку…" });
-      } else if (type === "response.output_item.done" && event.item?.type === "image_generation_call" && event.item.result) {
-        assistant.images.push(`data:image/png;base64,${event.item.result}`);
-        sendToRenderer("chat:image", { chatId, dataUrl: assistant.images[assistant.images.length - 1] });
-      } else if (type === "response.completed") {
-        assistant.citations = collectCitations(event.response);
-        if (!assistant.content && event.response?.output_text) {
-          assistant.content = event.response.output_text;
-        }
+      input = [];
+      for (const call of calls) {
+        const result = await localFiles.execute(call.name, parseToolArgs(call.arguments));
+        if (result.op) assistant.fileOps.push(result.op);
+        sendToRenderer("chat:status", { chatId, status: result.status });
+        if (result.op) sendToRenderer("chat:file", { chatId, op: result.op });
+        input.push({
+          type: "function_call_output",
+          call_id: call.call_id || call.id,
+          output: JSON.stringify(result.payload),
+        });
       }
     }
 
@@ -457,12 +521,13 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
       model,
       citations: assistant.citations,
       images: assistant.images,
+      fileOps: assistant.fileOps,
     });
     return { ok: true, title: chat.title, model };
   } catch (err) {
     const aborted = err?.name === "AbortError" || abortController.signal.aborted;
     if (aborted) {
-      if (assistant.content || assistant.images.length) {
+      if (assistant.content || assistant.images.length || assistant.fileOps.length) {
         chat.messages.push(assistant);
         chat.updatedAt = Date.now();
         await storage.saveChat(root, chat);
@@ -474,6 +539,7 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
         model,
         citations: assistant.citations,
         images: assistant.images,
+        fileOps: assistant.fileOps,
         stopped: true,
       });
       return { ok: true, stopped: true, title: chat.title, model };

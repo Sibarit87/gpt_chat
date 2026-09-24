@@ -728,6 +728,23 @@ textarea {
   text-decoration: underline;
 }
 
+.message-files {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.message-files .file-op {
+  margin-top: 4px;
+  word-break: break-all;
+}
+
+.message-files .file-op.error {
+  color: var(--danger);
+}
+
 .message-model {
   font-size: 11px;
   color: var(--accent);

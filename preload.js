@@ -32,6 +32,11 @@ contextBridge.exposeInMainWorld("chatApi", {
     ipcRenderer.on("chat:image", listener);
     return () => ipcRenderer.removeListener("chat:image", listener);
   },
+  onFile: (cb) => {
+    const listener = (_event, data) => cb(data);
+    ipcRenderer.on("chat:file", listener);
+    return () => ipcRenderer.removeListener("chat:file", listener);
+  },
   onDone: (cb) => {
     const listener = (_event, data) => cb(data);
     ipcRenderer.on("chat:done", listener);

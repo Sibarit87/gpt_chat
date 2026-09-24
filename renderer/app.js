@@ -235,7 +235,20 @@ function renderSidebar() {
   }
 }
 
-function addExtras(el, { citations = [], images = [], previewImages = [], status = "" } = {}) {
+function fileOpLabel(op) {
+  const labels = {
+    write: "Сохранён",
+    read: "Прочитан",
+    edit: "Изменён",
+    list: "Папка",
+    mkdir: "Создана папка",
+    open: "Открыт",
+  };
+  const prefix = op.ok === false ? "Ошибка" : labels[op.action] || op.action;
+  return op.path ? `${prefix}: ${op.path}` : `${prefix}${op.detail ? ` — ${op.detail}` : ""}`;
+}
+
+function addExtras(el, { citations = [], images = [], previewImages = [], status = "", fileOps = [] } = {}) {
   let statusEl = el.querySelector(".message-status");
   if (status) {
     if (!statusEl) {
@@ -285,6 +298,25 @@ function addExtras(el, { citations = [], images = [], previewImages = [], status
       box.appendChild(link);
     }
   }
+
+  if (fileOps.length) {
+    let box = el.querySelector(".message-files");
+    if (!box) {
+      box = document.createElement("div");
+      box.className = "message-files";
+      el.appendChild(box);
+    }
+    box.innerHTML = "";
+    const title = document.createElement("div");
+    title.textContent = "Файлы на компьютере";
+    box.appendChild(title);
+    for (const op of fileOps) {
+      const row = document.createElement("div");
+      row.className = op.ok === false ? "file-op error" : "file-op";
+      row.textContent = fileOpLabel(op);
+      box.appendChild(row);
+    }
+  }
 }
 
 function addMessage(role, content, extra = {}) {
@@ -320,7 +352,7 @@ function showEmpty() {
   messagesEl.innerHTML = "";
   emptyTitleEl.textContent = "Локальный чат с GPT";
   emptyTextEl.textContent =
-    "Создайте чат слева и напишите сообщение. История хранится на этом компьютере.";
+    "Создайте чат слева и напишите сообщение. Чат может читать и сохранять файлы на этом компьютере.";
   emptyStateEl.classList.remove("hidden");
   chatTitleEl.textContent = "Выберите чат";
   deleteChatBtn.classList.add("hidden");
@@ -345,7 +377,7 @@ async function openChat(id) {
   if (!chat.messages.length) {
     emptyTitleEl.textContent = "Новый диалог";
     emptyTextEl.textContent =
-      "Напишите первое сообщение — оно сохранится на этом компьютере.";
+      "Напишите, что сделать с файлом и куда его положить — чат умеет читать и сохранять документы на диске.";
     emptyStateEl.classList.remove("hidden");
   } else {
     emptyStateEl.classList.add("hidden");
@@ -355,6 +387,7 @@ async function openChat(id) {
         citations: message.citations || [],
         images: message.images || [],
         previewImages: message.previewImages || [],
+        fileOps: message.fileOps || [],
       });
     }
   }
@@ -481,7 +514,15 @@ window.chatApi.onImage(({ chatId, dataUrl }) => {
   dialogEl.scrollTop = dialogEl.scrollHeight;
 });
 
-window.chatApi.onDone(async ({ chatId, content, title, citations, images }) => {
+window.chatApi.onFile(({ chatId, op }) => {
+  if (chatId !== currentId || !assistantEl || !op) return;
+  const fileOps = [...(assistantEl._fileOps || []), op];
+  assistantEl._fileOps = fileOps;
+  addExtras(assistantEl, { fileOps });
+  dialogEl.scrollTop = dialogEl.scrollHeight;
+});
+
+window.chatApi.onDone(async ({ chatId, content, title, citations, images, fileOps }) => {
   if (assistantEl) {
     assistantEl.classList.remove("typing");
     assistantEl.dataset.raw = content || assistantEl.dataset.raw || "";
@@ -491,6 +532,7 @@ window.chatApi.onDone(async ({ chatId, content, title, citations, images }) => {
       status: "",
       citations: citations || [],
       images: images || assistantEl._images || [],
+      fileOps: fileOps || assistantEl._fileOps || [],
     });
     assistantEl = null;
   }
