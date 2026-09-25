@@ -121,6 +121,7 @@ function createClient(apiKey) {
   return new OpenAI({
     apiKey: String(apiKey || "").trim(),
     fetch: fetchImpl,
+    maxRetries: 0,
   });
 }
 
@@ -133,8 +134,15 @@ function describeError(err) {
   if (status === 401 || apiCode === "invalid_api_key") {
     return "OpenAI отклонил ключ. Создайте новый на platform.openai.com/api-keys и запишите его в .env";
   }
+  if (status === 429 && /rate limit reached/i.test(text)) {
+    const wait = text.match(/try again in\s+([\d.]+)s/i);
+    const seconds = wait ? Math.ceil(Number(wait[1])) : null;
+    return seconds
+      ? `Лимит токенов в минуту. Подождите около ${seconds} с и отправьте сообщение один раз.`
+      : "Лимит токенов в минуту. Подождите около минуты и отправьте сообщение один раз.";
+  }
   if (status === 429) {
-    return "Слишком много запросов или закончилась квота OpenAI.";
+    return "Закончилась квота OpenAI или сработал лимит трат. Проверьте баланс на platform.openai.com.";
   }
   if (status === 404) {
     return "Эта модель недоступна для текущего ключа.";

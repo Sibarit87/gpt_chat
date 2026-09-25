@@ -6,7 +6,7 @@ const storage = require("./storage");
 const filesApi = require("./files");
 const localFiles = require("./local-files");
 const { createClient, describeError } = require("./openai-client");
-const { DEFAULT_MODEL, MODELS, resolveModel } = require("./models");
+const { DEFAULT_MODEL, MODELS, resolveModel, modelRequest } = require("./models");
 const { usageFromResponse, sumUsage } = require("./usage");
 
 let mainWindow = null;
@@ -351,19 +351,63 @@ function functionCallsFrom(response, fallback) {
   return fromResponse.length ? fromResponse : fallback;
 }
 
+function rateLimitWaitMs(err) {
+  if (err?.status !== 429) return null;
+  const text = `${err?.message || ""}`;
+  if (!/rate limit reached/i.test(text)) return null;
+  const match = text.match(/try again in\s+([\d.]+)s/i);
+  const seconds = match ? Number(match[1]) : 8;
+  if (!Number.isFinite(seconds) || seconds < 0 || seconds > 30) return 8000;
+  return Math.ceil(seconds * 1000) + 400;
+}
+
+function waitWithSignal(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason || new Error("Aborted"));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason || new Error("Aborted"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function openResponseStream(client, body, signal) {
+  try {
+    return await client.responses.create(body, { signal });
+  } catch (err) {
+    const waitMs = rateLimitWaitMs(err);
+    if (waitMs == null) throw err;
+    await waitWithSignal(waitMs, signal);
+    return client.responses.create(body, { signal });
+  }
+}
+
 async function streamModelTurn({ client, model, input, tools, signal, chatId, assistant, previousId, first }) {
   const pendingCalls = [];
-  const stream = await client.responses.create(
+  const limits = modelRequest(model);
+  const imageGen = tools.some((tool) => tool.type === "image_generation");
+  const stream = await openResponseStream(
+    client,
     {
       model,
       input,
       stream: true,
       store: true,
+      max_output_tokens: imageGen ? Math.max(limits.max_output_tokens, 32768) : limits.max_output_tokens,
+      reasoning: limits.reasoning,
       ...(first ? { instructions: localFiles.FILE_INSTRUCTIONS } : {}),
       ...(previousId ? { previous_response_id: previousId } : {}),
       ...(tools.length ? { tools } : {}),
     },
-    { signal }
+    signal
   );
 
   let completed = null;
