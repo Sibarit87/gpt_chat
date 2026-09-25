@@ -12,6 +12,7 @@ const input = document.getElementById("input");
 const sendBtn = document.getElementById("sendBtn");
 const stopBtn = document.getElementById("stopBtn");
 const modelSelect = document.getElementById("modelSelect");
+const reasoningSelect = document.getElementById("reasoningSelect");
 const webSearchBtn = document.getElementById("webSearchBtn");
 const codeBtn = document.getElementById("codeBtn");
 const imageBtn = document.getElementById("imageBtn");
@@ -23,6 +24,7 @@ const fileInput = document.getElementById("fileInput");
 const attachList = document.getElementById("attachList");
 
 const MODEL_STORAGE_KEY = "gpt-chat.model";
+const REASONING_STORAGE_KEY = "gpt-chat.reasoning";
 const IMAGE_QUALITY_KEY = "gpt-chat.imageQuality";
 const IMAGE_SIZE_KEY = "gpt-chat.imageSize";
 const IMAGE_QUALITIES = ["auto", "low", "medium", "high", "xhigh", "max"];
@@ -38,11 +40,17 @@ let currentId = null;
 let streaming = false;
 let assistantEl = null;
 let models = [];
+let reasoningEfforts = [];
 let defaultModel = "gpt-6-luna";
+let defaultReasoning = "low";
 let currentFiles = [];
 
 function modelLabel(id) {
   return models.find((model) => model.id === id)?.label || id || "";
+}
+
+function reasoningLabel(id) {
+  return reasoningEfforts.find((item) => item.id === id)?.label || "";
 }
 
 function selectedModel() {
@@ -64,8 +72,28 @@ function fillModels(catalog) {
   modelSelect.value = current;
 }
 
+function fillReasoning(catalog) {
+  reasoningEfforts = catalog.reasoningEfforts || [];
+  defaultReasoning = catalog.defaultReasoning || defaultReasoning;
+  const saved = localStorage.getItem(REASONING_STORAGE_KEY);
+  const current = reasoningEfforts.some((item) => item.id === saved) ? saved : defaultReasoning;
+  reasoningSelect.innerHTML = "";
+  for (const item of reasoningEfforts) {
+    const option = document.createElement("option");
+    option.value = item.id;
+    option.textContent = item.label;
+    if (item.hint) option.title = item.hint;
+    reasoningSelect.appendChild(option);
+  }
+  if (reasoningEfforts.length) reasoningSelect.value = current;
+}
+
 modelSelect.addEventListener("change", () => {
   localStorage.setItem(MODEL_STORAGE_KEY, modelSelect.value);
+});
+
+reasoningSelect.addEventListener("change", () => {
+  localStorage.setItem(REASONING_STORAGE_KEY, reasoningSelect.value);
 });
 
 function toolOn(key) {
@@ -351,7 +379,9 @@ function addMessage(role, content, extra = {}) {
   if (role === "assistant" && model && !error) {
     const meta = document.createElement("div");
     meta.className = "message-model";
-    meta.textContent = modelLabel(model);
+    meta.textContent = extra.reasoning && reasoningLabel(extra.reasoning)
+      ? `${modelLabel(model)} · ${reasoningLabel(extra.reasoning)}`
+      : modelLabel(model);
     el.appendChild(meta);
   }
 
@@ -407,6 +437,7 @@ async function openChat(id) {
     for (const message of chat.messages) {
       addMessage(message.role, message.content, {
         model: message.model,
+        reasoning: message.reasoning,
         usage: message.usage,
         citations: message.citations || [],
         images: message.images || [],
@@ -467,11 +498,16 @@ composer.addEventListener("submit", async (event) => {
   input.value = "";
   autosize();
   addMessage("user", text);
-  assistantEl = addMessage("assistant", "", { streamingText: true, model: selectedModel() });
+  assistantEl = addMessage("assistant", "", {
+    streamingText: true,
+    model: selectedModel(),
+    reasoning: reasoningSelect.value,
+  });
   setStreamingUi(true);
 
   const result = await window.chatApi.sendMessage(currentId, text, {
     model: selectedModel(),
+    reasoning: reasoningSelect.value,
     webSearch: toolOn("webSearch"),
     codeInterpreter: toolOn("codeInterpreter"),
     imageGen: toolOn("imageGen"),
@@ -584,7 +620,9 @@ window.chatApi.onError(({ error }) => {
 (async function init() {
   applyTheme(await window.chatApi.getTheme());
   window.chatApi.onTheme(({ theme }) => applyTheme(theme));
-  fillModels(await window.chatApi.getModels());
+  const catalog = await window.chatApi.getModels();
+  fillModels(catalog);
+  fillReasoning(catalog);
   await refreshList();
   if (chats[0]) await openChat(chats[0].id);
   else showEmpty();

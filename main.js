@@ -6,7 +6,7 @@ const storage = require("./storage");
 const filesApi = require("./files");
 const localFiles = require("./local-files");
 const { createClient, describeError } = require("./openai-client");
-const { DEFAULT_MODEL, MODELS, resolveModel, modelRequest } = require("./models");
+const { DEFAULT_MODEL, MODELS, DEFAULT_REASONING, REASONING_EFFORTS, resolveModel, resolveReasoning, modelRequest } = require("./models");
 const { usageFromResponse, sumUsage } = require("./usage");
 
 let mainWindow = null;
@@ -390,9 +390,9 @@ async function openResponseStream(client, body, signal) {
   }
 }
 
-async function streamModelTurn({ client, model, input, tools, signal, chatId, assistant, previousId, first }) {
+async function streamModelTurn({ client, model, input, tools, signal, chatId, assistant, previousId, first, reasoning }) {
   const pendingCalls = [];
-  const limits = modelRequest(model);
+  const limits = modelRequest(model, reasoning);
   const imageGen = tools.some((tool) => tool.type === "image_generation");
   const stream = await openResponseStream(
     client,
@@ -454,7 +454,12 @@ async function recordUsage(root, record) {
   }
 }
 
-ipcMain.handle("models:list", () => ({ defaultModel: DEFAULT_MODEL, models: MODELS }));
+ipcMain.handle("models:list", () => ({
+  defaultModel: DEFAULT_MODEL,
+  models: MODELS,
+  defaultReasoning: DEFAULT_REASONING,
+  reasoningEfforts: REASONING_EFFORTS,
+}));
 
 ipcMain.handle("settings:theme", () => settings.theme);
 
@@ -511,10 +516,12 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
   abortController = new AbortController();
 
   const client = createClient(process.env.OPENAI_API_KEY);
+  const reasoning = resolveReasoning(options.reasoning);
   const assistant = {
     role: "assistant",
     content: "",
     model,
+    reasoning,
     citations: [],
     images: [],
     fileOps: [],
@@ -547,6 +554,7 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
         assistant,
         previousId,
         first: step === 0,
+        reasoning,
       });
       if (turn.usage) {
         const record = {

@@ -56,6 +56,10 @@
           <button class="tool-toggle" id="imageBtn" type="button" title="Генерация картинок. Выключена по умолчанию.">Картинка</button>
           <button class="tool-toggle" id="attachBtn" type="button" title="Прикрепить файл или изображение">Файл</button>
           <input class="hidden" id="fileInput" type="file" multiple accept=".pdf,.txt,.md,.csv,.json,.doc,.docx,.xlsx,.xls,.pptx,.html,.png,.jpg,.jpeg,.webp,.gif" />
+          <label class="model-picker reasoning-picker">
+            <span class="model-picker-label">Рассуждения</span>
+            <select id="reasoningSelect" title="Скрытая проверка перед ответом. Выше — тщательнее, дольше и больше токенов в минуту."></select>
+          </label>
           <button class="btn-send" id="sendBtn" type="submit" disabled>Отправить</button>
           <button class="btn-stop hidden" id="stopBtn" type="button">Стоп</button>
         </div>

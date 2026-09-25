@@ -582,6 +582,15 @@ textarea {
   white-space: nowrap;
 }
 
+.reasoning-picker {
+  margin-right: 0;
+  flex: 0 0 auto;
+}
+
+.reasoning-picker select {
+  max-width: 190px;
+}
+
 .model-picker select {
   appearance: none;
   border: 1px solid var(--line);
