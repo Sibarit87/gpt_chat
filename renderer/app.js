@@ -319,6 +319,28 @@ function addExtras(el, { citations = [], images = [], previewImages = [], status
   }
 }
 
+function formatUsage(usage) {
+  if (!usage?.totalTokens) return "";
+  const count = (value) => Number(value || 0).toLocaleString("ru-RU");
+  const parts = [`${count(usage.totalTokens)} всего`, `${count(usage.inputTokens)} вход`, `${count(usage.outputTokens)} выход`];
+  if (usage.cachedTokens) parts.push(`${count(usage.cachedTokens)} кэш`);
+  if (usage.reasoningTokens) parts.push(`${count(usage.reasoningTokens)} рассуждения`);
+  return parts.join(" · ");
+}
+
+function setUsage(el, usage) {
+  const text = formatUsage(usage);
+  if (!text) return;
+  let node = el.querySelector(".message-usage");
+  if (!node) {
+    node = document.createElement("div");
+    node.className = "message-usage";
+    const body = el.querySelector(".message-body");
+    el.insertBefore(node, body);
+  }
+  node.textContent = text;
+}
+
 function addMessage(role, content, extra = {}) {
   const { streamingText = false, error = false, model = "" } = extra;
   emptyStateEl.classList.add("hidden");
@@ -342,6 +364,7 @@ function addMessage(role, content, extra = {}) {
   }
   el.appendChild(body);
   el._body = body;
+  setUsage(el, extra.usage);
   addExtras(el, extra);
   messagesEl.appendChild(el);
   dialogEl.scrollTop = dialogEl.scrollHeight;
@@ -384,6 +407,7 @@ async function openChat(id) {
     for (const message of chat.messages) {
       addMessage(message.role, message.content, {
         model: message.model,
+        usage: message.usage,
         citations: message.citations || [],
         images: message.images || [],
         previewImages: message.previewImages || [],
@@ -522,12 +546,13 @@ window.chatApi.onFile(({ chatId, op }) => {
   dialogEl.scrollTop = dialogEl.scrollHeight;
 });
 
-window.chatApi.onDone(async ({ chatId, content, title, citations, images, fileOps }) => {
+window.chatApi.onDone(async ({ chatId, content, title, citations, images, fileOps, usage }) => {
   if (assistantEl) {
     assistantEl.classList.remove("typing");
     assistantEl.dataset.raw = content || assistantEl.dataset.raw || "";
     const body = assistantEl._body || assistantEl;
     body.innerHTML = renderMarkdown(assistantEl.dataset.raw || "");
+    setUsage(assistantEl, usage);
     addExtras(assistantEl, {
       status: "",
       citations: citations || [],

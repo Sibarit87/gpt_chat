@@ -7,6 +7,7 @@ const filesApi = require("./files");
 const localFiles = require("./local-files");
 const { createClient, describeError } = require("./openai-client");
 const { DEFAULT_MODEL, MODELS, resolveModel } = require("./models");
+const { usageFromResponse, sumUsage } = require("./usage");
 
 let mainWindow = null;
 let abortController = null;
@@ -397,7 +398,16 @@ async function streamModelTurn({ client, model, input, tools, signal, chatId, as
   return {
     response: completed,
     calls: functionCallsFrom(completed, pendingCalls),
+    usage: usageFromResponse(completed),
   };
+}
+
+async function recordUsage(root, record) {
+  try {
+    await storage.appendUsage(root, record);
+  } catch {
+    // статистика не должна срывать ответ
+  }
 }
 
 ipcMain.handle("models:list", () => ({ defaultModel: DEFAULT_MODEL, models: MODELS }));
@@ -478,6 +488,7 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
     imageSize: options.imageSize,
   });
 
+  const usageCalls = [];
   try {
     let input = await toInputMessages(chat);
     let previousId;
@@ -493,6 +504,17 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
         previousId,
         first: step === 0,
       });
+      if (turn.usage) {
+        const record = {
+          at: Date.now(),
+          chatId,
+          model,
+          step,
+          ...turn.usage,
+        };
+        usageCalls.push(record);
+        await recordUsage(root, record);
+      }
       previousId = turn.response?.id;
       const calls = turn.calls || [];
       if (!calls.length) break;
@@ -511,6 +533,8 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
       }
     }
 
+    const usage = sumUsage(usageCalls);
+    if (usage) assistant.usage = usage;
     chat.messages.push(assistant);
     chat.updatedAt = Date.now();
     await storage.saveChat(root, chat);
@@ -522,11 +546,14 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
       citations: assistant.citations,
       images: assistant.images,
       fileOps: assistant.fileOps,
+      usage,
     });
     return { ok: true, title: chat.title, model };
   } catch (err) {
     const aborted = err?.name === "AbortError" || abortController.signal.aborted;
     if (aborted) {
+      const usage = sumUsage(usageCalls);
+      if (usage) assistant.usage = usage;
       if (assistant.content || assistant.images.length || assistant.fileOps.length) {
         chat.messages.push(assistant);
         chat.updatedAt = Date.now();
@@ -540,6 +567,7 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
         citations: assistant.citations,
         images: assistant.images,
         fileOps: assistant.fileOps,
+        usage,
         stopped: true,
       });
       return { ok: true, stopped: true, title: chat.title, model };

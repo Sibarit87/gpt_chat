@@ -14,6 +14,10 @@ function chatPath(root, id) {
   return path.join(chatsDir(root), `${id}.json`);
 }
 
+function usageLogPath(root) {
+  return path.join(root, "usage.jsonl");
+}
+
 async function listChats(root) {
   await ensureDir(root);
   const files = await fs.readdir(chatsDir(root));
@@ -47,6 +51,11 @@ async function saveChat(root, chat) {
   await ensureDir(root);
   await fs.writeFile(chatPath(root, chat.id), JSON.stringify(chat, null, 2), "utf8");
   return chat;
+}
+
+async function appendUsage(root, record) {
+  await fs.mkdir(root, { recursive: true });
+  await fs.appendFile(usageLogPath(root), `${JSON.stringify(record)}\n`, "utf8");
 }
 
 async function deleteChat(root, id) {
@@ -103,6 +112,7 @@ module.exports = {
   listChats,
   getChat,
   saveChat,
+  appendUsage,
   deleteChat,
   createChat,
   titleFromMessage,
