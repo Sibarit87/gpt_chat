@@ -277,8 +277,14 @@ function estimateTokens(text) {
 }
 
 function promptTokens(message) {
+  // Первый вызов хода: история + инструкции + описание инструментов.
+  // Следующие вызовы хода тащат в себя содержимое прочитанных файлов и шаги модели,
+  // а в историю чата они не сохраняются.
   const calls = message.usage?.calls || [];
-  if (calls.length) return Math.max(...calls.map((call) => Number(call.inputTokens) || 0));
+  if (calls.length) {
+    const first = calls.find((call) => call.step === 0) || calls[0];
+    return Number(first.inputTokens) || 0;
+  }
   return Number(message.usage?.inputTokens) || 0;
 }
 
@@ -322,7 +328,7 @@ function renderContext(messages) {
   contextSizeEl.textContent = estimated ? `Контекст ≈ ${count}` : `Контекст ${count}`;
   contextSizeEl.title = estimated
     ? "Оценка по длине текста. Точное число появится после ответа без веб-поиска."
-    : "История чата для следующего запроса. Страницы веб-поиска в это число не входят.";
+    : "История чата и служебные инструкции для следующего запроса. Страницы веб-поиска и содержимое прочитанных файлов в это число не входят.";
 }
 
 function ensureReasoning(el) {
