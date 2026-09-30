@@ -550,8 +550,10 @@ textarea {
 
 .message-body table {
   border-collapse: collapse;
-  width: max-content;
-  min-width: 100%;
+  width: 100%;
+  /* Не уже самого длинного слова в каждой колонке: длинный текст переносится,
+     а таблица из многих колонок остаётся шире текста и прокручивается. */
+  min-width: min-content;
   margin: 0;
   font-size: 13px;
 }
@@ -562,6 +564,9 @@ textarea {
   padding: 6px 10px;
   text-align: left;
   vertical-align: top;
+  word-break: normal;
+  overflow-wrap: break-word;
+  white-space: normal;
 }
 
 .message-body th {
