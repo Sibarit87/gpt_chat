@@ -24,10 +24,16 @@
 
     <main class="main">
       <header class="chat-header" id="chatHeader">
-        <h1 id="chatTitle">Выберите чат</h1>
-        <button class="icon-btn danger hidden" id="deleteChatBtn" type="button" title="Удалить чат">
-          Удалить
-        </button>
+        <h1 id="chatTitle" title="Нажмите, чтобы переименовать">Выберите чат</h1>
+        <div class="header-actions hidden" id="headerActions">
+          <button class="icon-btn" id="renameChatBtn" type="button">Переименовать</button>
+          <div class="header-side">
+            <button class="icon-btn danger" id="deleteChatBtn" type="button" title="Удалить чат">
+              Удалить
+            </button>
+            <div class="context-size" id="contextSize" title="Сколько токенов занимает этот чат в запросе к модели"></div>
+          </div>
+        </div>
       </header>
 
       <section class="dialog" id="dialog" aria-live="polite">

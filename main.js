@@ -346,6 +346,17 @@ function parseToolArgs(raw) {
   }
 }
 
+function reasoningSummary(response) {
+  const parts = [];
+  for (const item of response?.output || []) {
+    if (item?.type !== "reasoning") continue;
+    for (const part of item.summary || []) {
+      if (part?.text) parts.push(part.text);
+    }
+  }
+  return parts.join("\n\n").trim();
+}
+
 function functionCallsFrom(response, fallback) {
   const fromResponse = (response?.output || []).filter((item) => item.type === "function_call");
   return fromResponse.length ? fromResponse : fallback;
@@ -411,9 +422,17 @@ async function streamModelTurn({ client, model, input, tools, signal, chatId, as
   );
 
   let completed = null;
+  let streamedReasoning = false;
   for await (const event of stream) {
     const type = event?.type || "";
-    if (type === "response.output_text.delta" && event.delta) {
+    if (
+      (type === "response.reasoning_summary_text.delta" || type === "response.reasoning_summary.delta") &&
+      event.delta
+    ) {
+      streamedReasoning = true;
+      assistant.reasoningText = `${assistant.reasoningText || ""}${event.delta}`;
+      sendToRenderer("chat:reasoning", { chatId, delta: event.delta });
+    } else if (type === "response.output_text.delta" && event.delta) {
       assistant.content += event.delta;
       sendToRenderer("chat:chunk", { chatId, delta: event.delta });
     } else if (type === "response.web_search_call.searching" || type === "response.web_search_call.in_progress") {
@@ -435,6 +454,13 @@ async function streamModelTurn({ client, model, input, tools, signal, chatId, as
       assistant.citations = collectCitations(event.response);
       if (!assistant.content && event.response?.output_text) {
         assistant.content = event.response.output_text;
+      }
+      const summary = reasoningSummary(event.response);
+      if (!streamedReasoning && summary) {
+        assistant.reasoningText = assistant.reasoningText
+          ? `${assistant.reasoningText}\n\n${summary}`
+          : summary;
+        sendToRenderer("chat:reasoning", { chatId, text: assistant.reasoningText });
       }
     }
   }
@@ -522,6 +548,7 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
     content: "",
     model,
     reasoning,
+    reasoningText: "",
     citations: [],
     images: [],
     fileOps: [],
@@ -595,6 +622,7 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
       content: assistant.content,
       title: chat.title,
       model,
+      reasoningText: assistant.reasoningText,
       citations: assistant.citations,
       images: assistant.images,
       fileOps: assistant.fileOps,
@@ -606,7 +634,7 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
     if (aborted) {
       const usage = sumUsage(usageCalls);
       if (usage) assistant.usage = usage;
-      if (assistant.content || assistant.images.length || assistant.fileOps.length) {
+      if (assistant.content || assistant.images.length || assistant.fileOps.length || assistant.reasoningText) {
         chat.messages.push(assistant);
         chat.updatedAt = Date.now();
         await storage.saveChat(root, chat);
@@ -616,6 +644,7 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
         content: assistant.content,
         title: chat.title,
         model,
+        reasoningText: assistant.reasoningText,
         citations: assistant.citations,
         images: assistant.images,
         fileOps: assistant.fileOps,

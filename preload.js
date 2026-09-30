@@ -17,6 +17,11 @@ contextBridge.exposeInMainWorld("chatApi", {
   removeFile: (chatId, fileId) => ipcRenderer.invoke("files:remove", chatId, fileId),
   sendMessage: (chatId, content, options) => ipcRenderer.invoke("chat:send", chatId, content, options),
   stop: () => ipcRenderer.invoke("chat:stop"),
+  onReasoning: (cb) => {
+    const listener = (_event, data) => cb(data);
+    ipcRenderer.on("chat:reasoning", listener);
+    return () => ipcRenderer.removeListener("chat:reasoning", listener);
+  },
   onChunk: (cb) => {
     const listener = (_event, data) => cb(data);
     ipcRenderer.on("chat:chunk", listener);

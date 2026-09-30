@@ -51,9 +51,11 @@ function resolveReasoning(id) {
 function modelRequest(id, reasoning) {
   const limits = LIMITS[resolveModel(id)] || LIMITS[DEFAULT_MODEL];
   const effort = resolveReasoning(reasoning);
+  const reasoningRequest = { effort };
+  if (effort !== "none") reasoningRequest.summary = "auto";
   return {
     max_output_tokens: limits.maxOutputTokens + (REASONING_HEADROOM[effort] || 0),
-    reasoning: { effort },
+    reasoning: reasoningRequest,
   };
 }
 

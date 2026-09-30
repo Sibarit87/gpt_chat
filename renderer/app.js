@@ -5,6 +5,9 @@ const emptyStateEl = document.getElementById("emptyState");
 const emptyTitleEl = document.getElementById("emptyTitle");
 const emptyTextEl = document.getElementById("emptyText");
 const chatTitleEl = document.getElementById("chatTitle");
+const headerActions = document.getElementById("headerActions");
+const renameChatBtn = document.getElementById("renameChatBtn");
+const contextSizeEl = document.getElementById("contextSize");
 const newChatBtn = document.getElementById("newChatBtn");
 const deleteChatBtn = document.getElementById("deleteChatBtn");
 const composer = document.getElementById("composer");
@@ -245,6 +248,11 @@ function renderSidebar() {
 
     const title = document.createElement("span");
     title.textContent = chat.title || "Новый чат";
+    title.title = "Двойной щелчок — переименовать";
+    title.addEventListener("dblclick", (event) => {
+      event.stopPropagation();
+      beginRename(chat.id, title.textContent, title);
+    });
     row.appendChild(title);
 
     const del = document.createElement("button");
@@ -261,6 +269,130 @@ function renderSidebar() {
     row.addEventListener("click", () => openChat(chat.id));
     chatListEl.appendChild(row);
   }
+}
+
+function estimateTokens(text) {
+  const length = String(text || "").length;
+  return length ? Math.ceil(length / 3) : 0;
+}
+
+function promptTokens(message) {
+  const calls = message.usage?.calls || [];
+  if (calls.length) return Math.max(...calls.map((call) => Number(call.inputTokens) || 0));
+  return Number(message.usage?.inputTokens) || 0;
+}
+
+function searchInflated(message, messages, index) {
+  if (!message.used?.webSearch) return false;
+  const input = promptTokens(message);
+  const history = messages.slice(0, index).reduce((sum, item) => sum + estimateTokens(item.content), 0);
+  const baseline = history + 800;
+  return input > baseline * 2 && input - baseline > 2000;
+}
+
+function contextTokens(messages) {
+  const list = messages || [];
+  let anchor = -1;
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    const message = list[index];
+    if (message.role !== "assistant" || !message.usage) continue;
+    if (searchInflated(message, list, index)) continue;
+    anchor = index;
+    break;
+  }
+  if (anchor >= 0) {
+    let tokens = promptTokens(list[anchor]);
+    for (let index = anchor; index < list.length; index += 1) {
+      tokens += estimateTokens(list[index].content);
+    }
+    return { tokens, estimated: false };
+  }
+  const chars = list.reduce((sum, message) => sum + String(message.content || "").length, 0);
+  return { tokens: chars ? Math.ceil(chars / 3) : 0, estimated: chars > 0 };
+}
+
+function renderContext(messages) {
+  if (!currentId) {
+    contextSizeEl.classList.add("hidden");
+    return;
+  }
+  const { tokens, estimated } = contextTokens(messages);
+  const count = Number(tokens || 0).toLocaleString("ru-RU");
+  contextSizeEl.classList.remove("hidden");
+  contextSizeEl.textContent = estimated ? `Контекст ≈ ${count}` : `Контекст ${count}`;
+  contextSizeEl.title = estimated
+    ? "Оценка по длине текста. Точное число появится после ответа без веб-поиска."
+    : "История чата для следующего запроса. Страницы веб-поиска в это число не входят.";
+}
+
+function ensureReasoning(el) {
+  let box = el.querySelector(".reasoning-spoiler");
+  if (!box) {
+    box = document.createElement("details");
+    box.className = "reasoning-spoiler";
+    const summary = document.createElement("summary");
+    summary.textContent = "Рассуждения";
+    const body = document.createElement("div");
+    body.className = "reasoning-body";
+    box.append(summary, body);
+    const usage = el.querySelector(".message-usage");
+    const messageBody = el.querySelector(".message-body");
+    el.insertBefore(box, usage || messageBody);
+  }
+  return box.querySelector(".reasoning-body");
+}
+
+function setReasoning(el, text) {
+  const value = String(text || "");
+  if (!value.trim()) return;
+  ensureReasoning(el).textContent = value;
+}
+
+let renameLock = false;
+
+function beginRename(id, currentTitle, host) {
+  if (!id || renameLock || host.querySelector("input")) return;
+  const previous = String(currentTitle || "").trim() || "Новый чат";
+  const field = document.createElement("input");
+  field.type = "text";
+  field.className = host === chatTitleEl ? "title-input" : "sidebar-rename";
+  field.value = previous === "Новый чат" ? "" : previous;
+  host.textContent = "";
+  host.appendChild(field);
+  field.focus();
+  field.select();
+
+  const finish = async (save) => {
+    if (renameLock) return;
+    renameLock = true;
+    const next = field.value.trim() || "Новый чат";
+    const saveTitle = save && field.dataset.cancel !== "1";
+    field.remove();
+    host.textContent = saveTitle ? next : previous;
+    try {
+      if (saveTitle && next !== previous) {
+        await window.chatApi.renameChat(id, next);
+        if (currentId === id && host !== chatTitleEl) chatTitleEl.textContent = next;
+        await refreshList();
+      }
+    } finally {
+      renameLock = false;
+    }
+  };
+
+  field.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      field.blur();
+    } else if (event.key === "Escape") {
+      field.value = previous === "Новый чат" ? "" : previous;
+      field.dataset.cancel = "1";
+      field.blur();
+    }
+  });
+  field.addEventListener("blur", () => {
+    finish(field.dataset.cancel !== "1");
+  });
 }
 
 function fileOpLabel(op) {
@@ -394,6 +526,7 @@ function addMessage(role, content, extra = {}) {
   }
   el.appendChild(body);
   el._body = body;
+  setReasoning(el, extra.reasoningText);
   setUsage(el, extra.usage);
   addExtras(el, extra);
   messagesEl.appendChild(el);
@@ -408,7 +541,8 @@ function showEmpty() {
     "Создайте чат слева и напишите сообщение. Чат может читать и сохранять файлы на этом компьютере.";
   emptyStateEl.classList.remove("hidden");
   chatTitleEl.textContent = "Выберите чат";
-  deleteChatBtn.classList.add("hidden");
+  headerActions.classList.add("hidden");
+  contextSizeEl.classList.add("hidden");
   currentId = null;
   currentFiles = [];
   renderFiles();
@@ -424,7 +558,8 @@ async function openChat(id) {
   const chat = await window.chatApi.getChat(id);
   currentId = chat.id;
   chatTitleEl.textContent = chat.title || "Новый чат";
-  deleteChatBtn.classList.remove("hidden");
+  headerActions.classList.remove("hidden");
+  renderContext(chat.messages);
   messagesEl.innerHTML = "";
 
   if (!chat.messages.length) {
@@ -438,6 +573,7 @@ async function openChat(id) {
       addMessage(message.role, message.content, {
         model: message.model,
         reasoning: message.reasoning,
+        reasoningText: message.reasoningText,
         usage: message.usage,
         citations: message.citations || [],
         images: message.images || [],
@@ -472,6 +608,14 @@ async function removeChat(id) {
 }
 
 newChatBtn.addEventListener("click", createChat);
+renameChatBtn.addEventListener("click", () => {
+  if (!currentId || chatTitleEl.querySelector("input")) return;
+  beginRename(currentId, chatTitleEl.textContent, chatTitleEl);
+});
+chatTitleEl.addEventListener("click", () => {
+  if (!currentId || chatTitleEl.querySelector("input")) return;
+  beginRename(currentId, chatTitleEl.textContent, chatTitleEl);
+});
 deleteChatBtn.addEventListener("click", () => {
   if (currentId) removeChat(currentId);
 });
@@ -552,6 +696,15 @@ stopBtn.addEventListener("click", () => {
   window.chatApi.stop();
 });
 
+window.chatApi.onReasoning(({ chatId, delta, text }) => {
+  if (chatId !== currentId || !assistantEl) return;
+  if (typeof text === "string") setReasoning(assistantEl, text);
+  else if (delta) {
+    const body = ensureReasoning(assistantEl);
+    body.textContent += delta;
+  }
+});
+
 window.chatApi.onChunk(({ chatId, delta }) => {
   if (chatId !== currentId || !assistantEl) return;
   assistantEl.classList.add("typing");
@@ -582,12 +735,13 @@ window.chatApi.onFile(({ chatId, op }) => {
   dialogEl.scrollTop = dialogEl.scrollHeight;
 });
 
-window.chatApi.onDone(async ({ chatId, content, title, citations, images, fileOps, usage }) => {
+window.chatApi.onDone(async ({ chatId, content, title, citations, images, fileOps, usage, reasoningText }) => {
   if (assistantEl) {
     assistantEl.classList.remove("typing");
     assistantEl.dataset.raw = content || assistantEl.dataset.raw || "";
     const body = assistantEl._body || assistantEl;
     body.innerHTML = renderMarkdown(assistantEl.dataset.raw || "");
+    setReasoning(assistantEl, reasoningText);
     setUsage(assistantEl, usage);
     addExtras(assistantEl, {
       status: "",
@@ -603,6 +757,7 @@ window.chatApi.onDone(async ({ chatId, content, title, citations, images, fileOp
     await refreshList();
     const chat = await window.chatApi.getChat(currentId);
     currentFiles = chat.files || [];
+    renderContext(chat.messages);
     renderFiles();
   }
   input.focus();
