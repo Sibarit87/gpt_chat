@@ -134,11 +134,15 @@ function createFetch() {
 
 let fetchImpl;
 
-function createClient(apiKey) {
+function getFetch() {
   if (!fetchImpl) fetchImpl = createFetch();
+  return fetchImpl;
+}
+
+function createClient(apiKey) {
   return new OpenAI({
     apiKey: String(apiKey || "").trim(),
-    fetch: fetchImpl,
+    fetch: getFetch(),
     maxRetries: 0,
   });
 }
@@ -175,8 +179,12 @@ function describeError(err) {
   ) {
     return "Антивирус или прокси подменяет HTTPS-сертификат, соединение с OpenAI заблокировано.";
   }
-  if (tlsCode === "ENOTFOUND" || tlsCode === "ECONNREFUSED" || tlsCode === "ETIMEDOUT") {
+  const netCode = tlsCode || err?.code || "";
+  if (netCode === "ENOTFOUND" || netCode === "ECONNREFUSED" || netCode === "ETIMEDOUT") {
     return "Нет соединения с api.openai.com. Проверьте интернет, VPN или прокси.";
+  }
+  if (netCode === "ECONNRESET" || netCode === "EPIPE" || /ECONNRESET|socket hang up/i.test(text)) {
+    return "Связь с сервером оборвалась. Проверьте интернет или VPN и отправьте сообщение ещё раз.";
   }
   if (/connection error/i.test(err?.message || "")) {
     return "Не удалось подключиться к OpenAI. Проверьте интернет, VPN и ключ в .env.";
@@ -184,4 +192,4 @@ function describeError(err) {
   return err?.message || "Ошибка запроса к OpenAI";
 }
 
-module.exports = { createClient, describeError };
+module.exports = { createClient, describeError, getFetch };

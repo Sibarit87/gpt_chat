@@ -418,6 +418,7 @@ function fileOpLabel(op) {
     list: "Папка",
     mkdir: "Создана папка",
     open: "Открыт",
+    telegram: "Telegram",
   };
   const prefix = op.ok === false ? "Ошибка" : labels[op.action] || op.action;
   return op.path ? `${prefix}: ${op.path}` : `${prefix}${op.detail ? ` — ${op.detail}` : ""}`;

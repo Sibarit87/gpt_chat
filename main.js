@@ -5,6 +5,7 @@ const path = require("path");
 const storage = require("./storage");
 const filesApi = require("./files");
 const localFiles = require("./local-files");
+const telegram = require("./telegram");
 const { createClient, describeError } = require("./openai-client");
 const { DEFAULT_MODEL, MODELS, DEFAULT_REASONING, REASONING_EFFORTS, resolveModel, resolveReasoning, modelRequest } = require("./models");
 const { usageFromResponse, sumUsage } = require("./usage");
@@ -114,11 +115,6 @@ function appDir() {
 }
 
 function loadEnv() {
-  if (process.env.OPENAI_API_KEY) {
-    process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY.trim();
-    return;
-  }
-
   const candidates = [
     path.join(appDir(), ".env"),
     path.join(process.cwd(), ".env"),
@@ -130,11 +126,11 @@ function loadEnv() {
     const resolved = path.resolve(file);
     if (seen.has(resolved) || !fs.existsSync(resolved)) continue;
     seen.add(resolved);
-    require("dotenv").config({ path: resolved, override: true });
-    if (process.env.OPENAI_API_KEY) {
-      process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY.trim();
-      return;
-    }
+    require("dotenv").config({ path: resolved, override: false });
+  }
+
+  for (const key of ["OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHANNEL_ID"]) {
+    if (process.env[key]) process.env[key] = process.env[key].trim();
   }
 }
 
@@ -298,7 +294,16 @@ function buildTools(chat, options) {
     tools.push({ type: "file_search", vector_store_ids: [chat.vectorStoreId] });
   }
   tools.push(...localFiles.FILE_TOOLS);
+  tools.push(...telegram.TELEGRAM_TOOLS);
   return tools;
+}
+
+function chatInstructions(chat) {
+  const names = telegram.imageNames(chat);
+  const extra = names.length
+    ? `${telegram.TELEGRAM_INSTRUCTIONS}\nСейчас к посту можно прикрепить фото: ${names.join(", ")}. Чтобы вложить скрины из последнего сообщения, передай images: ["all"].`
+    : telegram.TELEGRAM_INSTRUCTIONS;
+  return `${localFiles.FILE_INSTRUCTIONS}\n${extra}`;
 }
 
 async function toInputMessages(chat, currentUser) {
@@ -311,6 +316,10 @@ async function toInputMessages(chat, currentUser) {
     }
     const parts = [];
     if (message.content) parts.push({ type: "input_text", text: message.content });
+    const attachedNames = (message.images || []).map((image) => image.name).filter(Boolean);
+    if (attachedNames.length) {
+      parts.push({ type: "input_text", text: `Прикреплённые фото: ${attachedNames.join(", ")}` });
+    }
     for (const image of message.images || []) {
       try {
         const dataUrl = await filesApi.readDataUrl(image);
@@ -441,7 +450,7 @@ async function openResponseStream(client, body, signal) {
   }
 }
 
-async function streamModelTurn({ client, model, input, tools, signal, controller, chatId, assistant, previousId, first, reasoning }) {
+async function streamModelTurn({ client, model, input, tools, signal, controller, chat, chatId, assistant, previousId, first, reasoning }) {
   const pendingCalls = [];
   const limits = modelRequest(model, reasoning);
   const imageGen = tools.some((tool) => tool.type === "image_generation");
@@ -457,7 +466,7 @@ async function streamModelTurn({ client, model, input, tools, signal, controller
       store: true,
       max_output_tokens: imageGen ? Math.max(limits.max_output_tokens, 32768) : limits.max_output_tokens,
       reasoning: limits.reasoning,
-      ...(first ? { instructions: localFiles.FILE_INSTRUCTIONS } : {}),
+      ...(first ? { instructions: chatInstructions(chat) } : {}),
       ...(previousId ? { previous_response_id: previousId } : {}),
       ...(tools.length ? { tools } : {}),
     },
@@ -626,6 +635,7 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
         tools,
         signal: abortController.signal,
         controller: abortController,
+        chat,
         chatId,
         assistant,
         previousId,
@@ -649,7 +659,13 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
 
       input = [];
       for (const call of calls) {
-        const result = await localFiles.execute(call.name, parseToolArgs(call.arguments));
+        const args = parseToolArgs(call.arguments);
+        if (call.name === "telegram_post") {
+          sendToRenderer("chat:status", { chatId, status: "Публикую в Telegram…" });
+        }
+        const result = call.name === "telegram_post"
+          ? await telegram.execute(args, abortController.signal, chat)
+          : await localFiles.execute(call.name, args);
         if (result.op) assistant.fileOps.push(result.op);
         sendToRenderer("chat:status", { chatId, status: result.status });
         if (result.op) sendToRenderer("chat:file", { chatId, op: result.op });
