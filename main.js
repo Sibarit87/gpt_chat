@@ -17,6 +17,10 @@ let settings = { theme: "dark" };
 const IMAGE_QUALITY = new Set(["auto", "low", "medium", "high", "xhigh", "max"]);
 const IMAGE_SIZE = new Set(["auto", "1024x1024", "1536x1024", "1024x1536"]);
 const THEME_BG = { dark: "#121418", light: "#ffffff" };
+const STREAM_IDLE_MS = 3 * 60 * 1000;
+const SEND_TIMEOUT_MS = 15 * 60 * 1000;
+const STREAM_IDLE_ERROR = "Модель молчит уже 3 минуты, ответ прерван. Отправьте запрос ещё раз.";
+const SEND_TIMEOUT_ERROR = "Ответ шёл дольше 15 минут и был прерван. Отправьте запрос ещё раз.";
 
 function settingsPath() {
   return path.join(app.getPath("userData"), "settings.json");
@@ -372,6 +376,42 @@ function rateLimitWaitMs(err) {
   return Math.ceil(seconds * 1000) + 400;
 }
 
+function timeoutError(message) {
+  const err = new Error(message);
+  err.name = "TimeoutError";
+  return err;
+}
+
+function isTimeoutError(err, signal) {
+  const reason = signal?.reason;
+  return err?.name === "TimeoutError" || reason?.name === "TimeoutError" || err?.code === "ETIMEDOUT";
+}
+
+function startTimer(controller, ms, message) {
+  const timer = setTimeout(() => {
+    if (!controller.signal.aborted) controller.abort(timeoutError(message));
+  }, ms);
+  return () => clearTimeout(timer);
+}
+
+function startIdleWatchdog(controller, ms, message) {
+  let timer;
+  const kick = () => {
+    clearTimeout(timer);
+    if (controller.signal.aborted) return;
+    timer = setTimeout(() => {
+      if (!controller.signal.aborted) controller.abort(timeoutError(message));
+    }, ms);
+  };
+  kick();
+  return {
+    kick,
+    stop() {
+      clearTimeout(timer);
+    },
+  };
+}
+
 function waitWithSignal(ms, signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -401,11 +441,14 @@ async function openResponseStream(client, body, signal) {
   }
 }
 
-async function streamModelTurn({ client, model, input, tools, signal, chatId, assistant, previousId, first, reasoning }) {
+async function streamModelTurn({ client, model, input, tools, signal, controller, chatId, assistant, previousId, first, reasoning }) {
   const pendingCalls = [];
   const limits = modelRequest(model, reasoning);
   const imageGen = tools.some((tool) => tool.type === "image_generation");
-  const stream = await openResponseStream(
+  const idle = controller ? startIdleWatchdog(controller, STREAM_IDLE_MS, STREAM_IDLE_ERROR) : null;
+  try {
+    sendToRenderer("chat:status", { chatId, status: "Жду ответ модели…" });
+    const stream = await openResponseStream(
     client,
     {
       model,
@@ -418,13 +461,14 @@ async function streamModelTurn({ client, model, input, tools, signal, chatId, as
       ...(previousId ? { previous_response_id: previousId } : {}),
       ...(tools.length ? { tools } : {}),
     },
-    signal
-  );
+      signal
+    );
 
-  let completed = null;
-  let streamedReasoning = false;
-  for await (const event of stream) {
-    const type = event?.type || "";
+    let completed = null;
+    let streamedReasoning = false;
+    for await (const event of stream) {
+      idle?.kick();
+      const type = event?.type || "";
     if (
       (type === "response.reasoning_summary_text.delta" || type === "response.reasoning_summary.delta") &&
       event.delta
@@ -465,11 +509,14 @@ async function streamModelTurn({ client, model, input, tools, signal, chatId, as
     }
   }
 
-  return {
-    response: completed,
-    calls: functionCallsFrom(completed, pendingCalls),
-    usage: usageFromResponse(completed),
-  };
+    return {
+      response: completed,
+      calls: functionCallsFrom(completed, pendingCalls),
+      usage: usageFromResponse(completed),
+    };
+  } finally {
+    idle?.stop();
+  }
 }
 
 async function recordUsage(root, record) {
@@ -540,6 +587,7 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
 
   streaming = true;
   abortController = new AbortController();
+  const stopSendTimer = startTimer(abortController, SEND_TIMEOUT_MS, SEND_TIMEOUT_ERROR);
 
   const client = createClient(process.env.OPENAI_API_KEY);
   const reasoning = resolveReasoning(options.reasoning);
@@ -577,6 +625,7 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
         input,
         tools,
         signal: abortController.signal,
+        controller: abortController,
         chatId,
         assistant,
         previousId,
@@ -630,27 +679,38 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
     });
     return { ok: true, title: chat.title, model };
   } catch (err) {
-    const aborted = err?.name === "AbortError" || abortController.signal.aborted;
-    if (aborted) {
+    const timedOut = isTimeoutError(err, abortController.signal);
+    const aborted = !timedOut && (err?.name === "AbortError" || abortController.signal.aborted);
+    if (aborted || timedOut) {
       const usage = sumUsage(usageCalls);
       if (usage) assistant.usage = usage;
-      if (assistant.content || assistant.images.length || assistant.fileOps.length || assistant.reasoningText) {
+      const hasPartial = Boolean(
+        assistant.content || assistant.images.length || assistant.fileOps.length || assistant.reasoningText
+      );
+      if (hasPartial) {
         chat.messages.push(assistant);
         chat.updatedAt = Date.now();
         await storage.saveChat(root, chat);
       }
-      sendToRenderer("chat:done", {
-        chatId,
-        content: assistant.content,
-        title: chat.title,
-        model,
-        reasoningText: assistant.reasoningText,
-        citations: assistant.citations,
-        images: assistant.images,
-        fileOps: assistant.fileOps,
-        usage,
-        stopped: true,
-      });
+      if (hasPartial || aborted) {
+        sendToRenderer("chat:done", {
+          chatId,
+          content: assistant.content,
+          title: chat.title,
+          model,
+          reasoningText: assistant.reasoningText,
+          citations: assistant.citations,
+          images: assistant.images,
+          fileOps: assistant.fileOps,
+          usage,
+          stopped: true,
+        });
+      }
+      if (timedOut) {
+        const message = describeError(err?.name === "TimeoutError" ? err : abortController.signal.reason || err);
+        sendToRenderer("chat:error", { chatId, error: message });
+        return { ok: false, error: message };
+      }
       return { ok: true, stopped: true, title: chat.title, model };
     }
 
@@ -658,6 +718,7 @@ ipcMain.handle("chat:send", async (_event, chatId, content, options = {}) => {
     sendToRenderer("chat:error", { chatId, error: message });
     return { ok: false, error: message };
   } finally {
+    stopSendTimer();
     streaming = false;
     abortController = null;
   }

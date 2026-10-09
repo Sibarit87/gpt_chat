@@ -42,6 +42,7 @@ let chats = [];
 let currentId = null;
 let streaming = false;
 let assistantEl = null;
+let shownError = "";
 let models = [];
 let reasoningEfforts = [];
 let defaultModel = "gpt-6-luna";
@@ -224,6 +225,14 @@ function setStreamingUi(on) {
   sendBtn.classList.toggle("hidden", on);
   stopBtn.classList.toggle("hidden", !on);
   setComposerEnabled(!on && Boolean(currentId));
+}
+
+function showRequestError(error) {
+  const text = error || "Ошибка запроса";
+  if (shownError === text) return;
+  shownError = text;
+  addMessage("assistant", text, { error: true });
+  setStreamingUi(false);
 }
 
 function autosize() {
@@ -647,6 +656,7 @@ composer.addEventListener("submit", async (event) => {
 
   input.value = "";
   autosize();
+  shownError = "";
   addMessage("user", text);
   assistantEl = addMessage("assistant", "", {
     streamingText: true,
@@ -665,9 +675,17 @@ composer.addEventListener("submit", async (event) => {
     imageSize: imageSize.value,
   });
   if (!result?.ok && result?.error && assistantEl) {
-    assistantEl.remove();
+    const keep = Boolean((assistantEl.dataset.raw || "").trim());
+    if (keep) {
+      assistantEl.classList.remove("typing");
+      addExtras(assistantEl, { status: "" });
+    } else {
+      assistantEl.remove();
+      assistantEl = null;
+      showRequestError(result.error);
+      return;
+    }
     assistantEl = null;
-    addMessage("assistant", result.error, { error: true });
     setStreamingUi(false);
   }
 });
@@ -771,11 +789,16 @@ window.chatApi.onDone(async ({ chatId, content, title, citations, images, fileOp
 
 window.chatApi.onError(({ error }) => {
   if (assistantEl) {
-    assistantEl.remove();
+    const keep = Boolean((assistantEl.dataset.raw || "").trim());
+    if (keep) {
+      assistantEl.classList.remove("typing");
+      addExtras(assistantEl, { status: "" });
+    } else {
+      assistantEl.remove();
+    }
     assistantEl = null;
   }
-  addMessage("assistant", error || "Ошибка запроса", { error: true });
-  setStreamingUi(false);
+  showRequestError(error);
 });
 
 (async function init() {

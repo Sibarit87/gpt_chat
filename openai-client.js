@@ -66,6 +66,15 @@ function createFetch() {
   return (url, init = {}) =>
     new Promise((resolve, reject) => {
       const target = new URL(String(url));
+      let settled = false;
+      let headersTimer;
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(headersTimer);
+        fn(value);
+      };
+
       const req = https.request(
         {
           protocol: target.protocol,
@@ -83,7 +92,8 @@ function createFetch() {
             if (Array.isArray(value)) value.forEach((item) => headers.append(key, String(item)));
             else headers.set(key, String(value));
           }
-          resolve(
+          finish(
+            resolve,
             new Response(Readable.toWeb(res), {
               status: res.statusCode,
               statusText: res.statusMessage,
@@ -93,12 +103,20 @@ function createFetch() {
         }
       );
 
-      req.on("error", reject);
+      headersTimer = setTimeout(() => {
+        const err = new Error(
+          "OpenAI не ответил за минуту. Проверьте интернет и отправьте сообщение ещё раз."
+        );
+        err.name = "TimeoutError";
+        req.destroy(err);
+      }, 60_000);
+
+      req.on("error", (err) => finish(reject, err));
 
       if (init.signal) {
         if (init.signal.aborted) {
           req.destroy();
-          reject(init.signal.reason || new Error("Aborted"));
+          finish(reject, init.signal.reason || new Error("Aborted"));
           return;
         }
         init.signal.addEventListener(
@@ -131,6 +149,9 @@ function describeError(err) {
   const tlsCode = err?.cause?.code || "";
   const text = `${err?.message || ""} ${err?.cause?.message || ""}`;
 
+  if (err?.name === "TimeoutError" && err.message) {
+    return err.message;
+  }
   if (status === 401 || apiCode === "invalid_api_key") {
     return "OpenAI отклонил ключ. Создайте новый на platform.openai.com/api-keys и запишите его в .env";
   }
