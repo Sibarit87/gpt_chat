@@ -19,54 +19,15 @@
 - Счётчик контекста следующего запроса (без страниц поиска и содержимого прочитанных файлов)
 - Учёт токенов по каждому вызову API
 
+
+
 ## Стек
 
 Electron 34 · Node · OpenAI Responses API · обычный HTML/CSS/JS в рендерере · electron-builder (portable exe)
 
 Без фреймворка в UI: один процесс main, preload, локальные инструменты.
 
-## Запуск
 
-Нужны Node.js и ключ [OpenAI API](https://platform.openai.com/api-keys).
-
-```bash
-git clone https://github.com/Sibarit87/gpt_chat.git
-cd gpt_chat
-npm install
-```
-
-Рядом с проектом (или с `GPT Chat 1.0.0.exe`) файл `.env`:
-
-```
-OPENAI_API_KEY=sk-...
-```
-
-```bash
-npm start
-```
-
-Портативный exe:
-
-```bash
-npm run build
-```
-
-Готовый файл: `dist/GPT Chat 1.0.0.exe`. Чаты и статистика — `%APPDATA%\GPT Chat\data`, не в репозитории.
-
-## Telegram (по желанию)
-
-Бот через [@BotFather](https://t.me/BotFather), добавить его админом канала с правом публиковать. В тот же `.env`:
-
-```
-TELEGRAM_BOT_TOKEN=123456:ABC...
-TELEGRAM_CHANNEL_ID=@имя_канала
-```
-
-В чате: «сделай пост и выложи». Скрины из переписки можно не прикладывать повторно — модель берёт фото из чата.
-
-## Чего в репозитории нет
-
-Ключи, `node_modules`, собранный exe, история чатов. Это исходники продукта, не бэкап рабочей машины.
 
 ## Лицензия
 
